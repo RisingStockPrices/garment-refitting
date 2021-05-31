@@ -72,7 +72,35 @@ def is_current_segment(face_idx, target_obj, seg_vertices):
             if v.index==idx:
                 return True
     return False
+
+def bbox(vertices):
+    x_min = float("inf")
+    x_max = float("-inf")
+    y_min = float("inf")
+    y_max = float("-inf")
+    z_min = float("inf")
+    z_max = float("-inf")
     
+    for v in vertices:
+        if v[0]>x_max:
+            x_max = v[0]
+        if v[0]<x_min:
+            x_min = v[0]
+        if v[1]>y_max:
+            y_max = v[1]
+        if v[1]<y_min:
+            y_min = v[1]
+        if v[2]>z_max:
+            z_max = v[2]
+        if v[2]<z_min:
+            z_min = v[2]
+    
+    center = Vector((x_min+x_max,y_min+y_max,z_min+z_max))
+    center /=2
+    
+    return center, x_max-x_min, y_max-y_min, z_max-z_min
+        
+        
 # takes in segments_f or segments_m as source and target,
 def get_correspondence(seg_idx, _source, _target):
     
@@ -80,6 +108,38 @@ def get_correspondence(seg_idx, _source, _target):
     post_process_coords = []
     source = _source[seg_idx]
     target = _target[seg_idx]
+    """
+    # compute bounding box for source and target segments
+    center_source, x_s, y_s, z_s = bbox(get_coords(source))
+    center_target, x_t, y_t, z_t = bbox(get_coords(target))
+    #print(bbox_source)
+    
+    for v in source:
+        direction = v.co - center_source
+        
+        # scale up the direction
+        direction[0] *= x_t/x_s
+        direction[1] *= y_t/y_s
+        direction[2] *= z_t/z_s
+
+        
+        res, loc, nor, idx = male.ray_cast(center_target,direction)
+        if res is True and is_current_segment(idx,male,target):    
+            coords.append((v.index,loc))
+        else:
+            coords.append((v.index,center_target+direction))
+                # update direction to better fit the segment
+        
+        #coords.append((v.index,loc))
+        
+        res,loc,nor,idx = male.ray_cast(center_target, direction)
+        if res is False:
+            print('ray cast failed for idx ',v.index)
+        elif True:#is_current_segment(idx, male, target):
+            coords.append((v.index, loc)) 
+        else:
+            post_process_coords.append((v.index,direction))
+    """
     
     center_source = center_of_mass(source)
     center_target = center_of_mass(target)
@@ -97,22 +157,30 @@ def get_correspondence(seg_idx, _source, _target):
             coords.append((v.index,loc))
             sum += (loc-center_target).length/direction.length
         else:
-            post_process_coords.append((v.index,direction))
-        
+            r, l, n, i = male.closest_point_on_mesh(center_target+direction)
+            coords.append((v.index, l))
+            #print('undealt idx:',v.index)
+            #post_process_coords.append((v.index,direction))
+    
+    #make_temp_mesh(list(map(lambda x:x[1],coords)))
     average_scale = sum / len(coords)
-    print(average_scale)
+    #print(average_scale)
+    print('unregistered points: ',len(post_process_coords))
     for idx,vec in post_process_coords:
         coords.append((idx,average_scale*vec+center_target))
     
     if len(source)!=len(coords):
         print('Error! different length in GET_CORRESPONDENCE')
         #exit(2)
-        
+    
     return coords
+
+#get_correspondence(10, segments_f, segments_m)
+
 
 # Idx 0 is the HEAD (takes up over 3,000 vertices, which is pretty wasteful)
 # Our code works for garments that go below the head
-for i in range(1,16):
+for i in range(0,16):
     res = get_correspondence(i,segments_f, segments_m)
     for v in res:
         correspondences.append(v)
@@ -124,7 +192,7 @@ for i in range(1,16):
 ###############################################
 
 source = bpy.data.objects['source_f']
-garment = bpy.data.objects['garment_skirt']
+garment = bpy.data.objects['garment_shirt']
 target = bpy.data.objects['target_m']
 
 garment_vertices = garment.data.vertices
@@ -140,31 +208,34 @@ def get_corresponding_vertex(source_idx):
     for idx,coords in correspondences:
         if source_idx==idx:
             return coords
-    print(source_idx)
+    #print(source_idx)
     return None
 
 for v in garment_vertices:
-    # get projection from garment vertex to source model
+    # bind garment vertex to closets point in source mesh
     res, loc, nor, idx = source.closest_point_on_mesh(v.co)
     
+    # compute barycentric coordinates of the closest point
     face_vertex_index = source_polygons[idx].vertices
-    # interpolate projected point from source onto target
     source_face_vertices = [source_vertices[vx].co for vx in face_vertex_index]
     bary_weights = poly_3d_calc(source_face_vertices, loc)
     target_projection_point = Vector((0,0,0))
 
-    # get correspondence from source to target    
+    # for each vertex in the entailing triangle, 
+    # get correspondending point in target    
+    check = False
     for i in range(3):
         co = get_corresponding_vertex(face_vertex_index[i])
         if co==None:
-            print('correspondence doesnt exist')
-            #exit(-1)
-            #return
+            print('correspondence doesnt exist for segment')
+            check = True
+            break
         else:
             target_projection_point += bary_weights[i] * co
-        
-    scale = 1.0
-    deformed_garment_vertices.append(scale * (target_projection_point + (v.co - loc)))
+    if check:
+        continue
+    scale = 1.5
+    deformed_garment_vertices.append( (target_projection_point + scale*(v.co - loc)))
   
 
 mesh = bpy.data.meshes.new("mesh")
