@@ -12,8 +12,10 @@ import numpy as np
 
 # We assume Mesh Segmentation Results are given in advance
 # load mesh segmentation results for source and target models
-labels_female = np.load("C:\\Users\\Spock_the_Wizard\\Desktop\\researchSpring21\\clothes\\labels.npy")
-labels_male = np.load('C:\\Users\\Spock_the_Wizard\\Desktop\\researchSpring21\\clothes\\labels_male.npy')
+#labels_female = np.load("C:\\Users\\Spock_the_Wizard\\Desktop\\researchSpring21\\clothes\\labels.npy")
+#labels_male = np.load('C:\\Users\\Spock_the_Wizard\\Desktop\\researchSpring21\\clothes\\labels_male.npy')
+labels_female = np.load("C:\\Users\\SpocktheWizard\\Desktop\\garment-refitting\\clothes\\labels.npy")
+labels_male = np.load('C:\\Users\\SpocktheWizard\\Desktop\\garment-refitting\\clothes\\labels_male.npy')
 
 female = bpy.data.objects['source_f']
 male = bpy.data.objects['target_m']
@@ -32,9 +34,34 @@ for i in range(16):
     segments_m.append([])
 for v in vertices_m:
     seg_idx = labels_male[v.index]
+    """
+    if 1<= seg_idx <=2:
+        seg_idx = 1
+    elif 4<=seg_idx<=5:
+        seg_idx = 4
+    elif 7<=seg_idx<=8:
+        seg_idx = 7
+    elif 10<=seg_idx<=11:
+        seg_idx = 10
+    elif 13<=seg_idx<=14:
+        seg_idx = 13
+    """
     segments_m[seg_idx].append(v)
+    
 for v in vertices_f:
     seg_idx = labels_female[v.index]
+    """
+    if 1<= seg_idx <=2:
+        seg_idx = 1
+    elif 4<=seg_idx<=5:
+        seg_idx = 4
+    elif 7<=seg_idx<=8:
+        seg_idx = 7
+    elif 10<=seg_idx<=11:
+        seg_idx = 10
+    elif 13<=seg_idx<=14:
+        seg_idx = 13
+    """
     segments_f[seg_idx].append(v)
     
 
@@ -66,12 +93,28 @@ def make_temp_mesh(vertices):
     mesh_data.from_pydata(vertices, [], [])
 
 # Checks if ray cast result is in current segment
-def is_current_segment(face_idx, target_obj, seg_vertices):
-    for idx in target_obj.data.polygons[face_idx].vertices:
-        for v in seg_vertices:
-            if v.index==idx:
-                return True
-    return False
+def is_current_segment(face_idx, target_obj, seg_vertices, strict=True):
+    if strict:
+        # for the three vertices making up the polygon,
+        # check if each one is a valid member of the segment
+        for idx in target_obj.data.polygons[face_idx].vertices:
+            okay = False
+            for v in seg_vertices:
+                if v.index==idx:
+                    # found a match
+                    okay = True
+                    break
+            if not okay:
+                return False
+        return True
+    else:
+        # looser restrictions
+        # at least one vertex should be a valid member
+        for idx in target_obj.data.polygons[face_idx].vertices:
+            for v in seg_vertices:
+                if v.index==idx:
+                    return True
+        return False
 
 def bbox(vertices):
     x_min = float("inf")
@@ -100,7 +143,15 @@ def bbox(vertices):
     
     return center, x_max-x_min, y_max-y_min, z_max-z_min
         
-        
+def get_nearest_point(pt, points):
+    dist = []
+    for v in points:
+        distance = (pt-v.co).length
+        dist.append((v, distance))
+    
+    dist.sort(key=lambda x:x[1])
+    return dist[0][0]
+
 # takes in segments_f or segments_m as source and target,
 def get_correspondence(seg_idx, _source, _target):
     
@@ -108,7 +159,10 @@ def get_correspondence(seg_idx, _source, _target):
     post_process_coords = []
     source = _source[seg_idx]
     target = _target[seg_idx]
-    """
+    
+    if len(source)==0:
+        return coords
+    
     # compute bounding box for source and target segments
     center_source, x_s, y_s, z_s = bbox(get_coords(source))
     center_target, x_t, y_t, z_t = bbox(get_coords(target))
@@ -131,14 +185,7 @@ def get_correspondence(seg_idx, _source, _target):
                 # update direction to better fit the segment
         
         #coords.append((v.index,loc))
-        
-        res,loc,nor,idx = male.ray_cast(center_target, direction)
-        if res is False:
-            print('ray cast failed for idx ',v.index)
-        elif True:#is_current_segment(idx, male, target):
-            coords.append((v.index, loc)) 
-        else:
-            post_process_coords.append((v.index,direction))
+    
     """
     
     center_source = center_of_mass(source)
@@ -153,34 +200,30 @@ def get_correspondence(seg_idx, _source, _target):
     for v in source:
         direction = v.co-center_source
         res, loc, nor, idx = male.ray_cast(center_target,direction)
-        if res and is_current_segment(idx, male, target):
+        if res and is_current_segment(idx, male, target,strict=False):
             coords.append((v.index,loc))
             sum += (loc-center_target).length/direction.length
         else:
-            r, l, n, i = male.closest_point_on_mesh(center_target+direction)
-            coords.append((v.index, l))
+            clo = get_nearest_point(center_target+direction,target)
+            coords.append((v.index,clo.co))
+            #print('closest point',clo)
+            #r, l, n, i = male.closest_point_on_mesh(center_target+direction)
+            #coords.append((v.index, l))
             #print('undealt idx:',v.index)
-            #post_process_coords.append((v.index,direction))
     
-    #make_temp_mesh(list(map(lambda x:x[1],coords)))
-    average_scale = sum / len(coords)
-    #print(average_scale)
-    print('unregistered points: ',len(post_process_coords))
-    for idx,vec in post_process_coords:
-        coords.append((idx,average_scale*vec+center_target))
-    
+    # make_temp_mesh(list(map(lambda x:x[1],coords)))
+    """
     if len(source)!=len(coords):
-        print('Error! different length in GET_CORRESPONDENCE')
-        #exit(2)
+        print('Segment [',seg_idx,']: Successfully recovered',len(coords),'vertices out of',len(source))
     
     return coords
 
-#get_correspondence(10, segments_f, segments_m)
+#get_correspondence(15, segments_f, segments_m)
 
 
 # Idx 0 is the HEAD (takes up over 3,000 vertices, which is pretty wasteful)
 # Our code works for garments that go below the head
-for i in range(0,16):
+for i in range(16):
     res = get_correspondence(i,segments_f, segments_m)
     for v in res:
         correspondences.append(v)
@@ -192,7 +235,7 @@ for i in range(0,16):
 ###############################################
 
 source = bpy.data.objects['source_f']
-garment = bpy.data.objects['garment_shirt']
+garment = bpy.data.objects['garment_pants']
 target = bpy.data.objects['target_m']
 
 garment_vertices = garment.data.vertices
@@ -211,6 +254,7 @@ def get_corresponding_vertex(source_idx):
     #print(source_idx)
     return None
 
+valid_idx = []
 for v in garment_vertices:
     # bind garment vertex to closets point in source mesh
     res, loc, nor, idx = source.closest_point_on_mesh(v.co)
@@ -227,7 +271,7 @@ for v in garment_vertices:
     for i in range(3):
         co = get_corresponding_vertex(face_vertex_index[i])
         if co==None:
-            print('correspondence doesnt exist for segment')
+            #print('correspondence doesnt exist for segment')
             check = True
             break
         else:
@@ -236,7 +280,7 @@ for v in garment_vertices:
         continue
     scale = 1.5
     deformed_garment_vertices.append( (target_projection_point + scale*(v.co - loc)))
-  
+    valid_idx.append(v.index)
 
 mesh = bpy.data.meshes.new("mesh")
 new_garment = bpy.data.objects.new("deformed_garment", mesh)
@@ -250,7 +294,21 @@ bm = bmesh.new()
 
 face_list = []
 for p in garment_polygons:
-    idx_list = [ v for v in p.vertices]
-    face_list.append(idx_list)
-
+    skip = False
+    idx_list = []
+    for v in p.vertices:
+        try:
+            # get new index of the vertex in deformed vertices list
+            new_idx = valid_idx.index(v)
+            idx_list.append(new_idx)
+        except ValueError:
+            # move on to the next polygon
+            break
+    # valid polygon in the deformed garment
+    if len(idx_list) == len(p.vertices):
+        face_list.append(idx_list)
+        
+    #idx_list = [ v for v in p.vertices]
+    #face_list.append(idx_list)
+print('successfully recovered ',len(face_list),'out of',len(garment_polygons))
 mesh.from_pydata(deformed_garment_vertices, [], face_list)
