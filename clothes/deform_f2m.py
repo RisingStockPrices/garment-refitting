@@ -93,7 +93,7 @@ def make_temp_mesh(vertices):
     mesh_data.from_pydata(vertices, [], [])
 
 # Checks if ray cast result is in current segment
-def is_current_segment(face_idx, target_obj, seg_vertices, strict=True):
+def is_current_segment(face_idx, target_obj, seg_vertices, strict=False):
     if strict:
         # for the three vertices making up the polygon,
         # check if each one is a valid member of the segment
@@ -179,9 +179,11 @@ def get_correspondence(seg_idx, _source, _target):
         
         res, loc, nor, idx = male.ray_cast(center_target,direction)
         if res is True and is_current_segment(idx,male,target):    
-            coords.append((v.index,loc))
+            coords.append((v.index,loc,nor))
         else:
-            coords.append((v.index,center_target+direction))
+            clo = get_nearest_point(center_target+direction,target)
+            coords.append((v.index,clo.co,clo.normal))
+            #coords.append((v.index,center_target+direction))
                 # update direction to better fit the segment
         
         #coords.append((v.index,loc))
@@ -235,7 +237,7 @@ for i in range(16):
 ###############################################
 
 source = bpy.data.objects['source_f']
-garment = bpy.data.objects['garment_pants']
+garment = bpy.data.objects['garment_shirt']
 target = bpy.data.objects['target_m']
 
 garment_vertices = garment.data.vertices
@@ -248,9 +250,9 @@ source_polygons = source.data.polygons
 deformed_garment_vertices = []
 
 def get_corresponding_vertex(source_idx):
-    for idx,coords in correspondences:
-        if source_idx==idx:
-            return coords
+    for v in correspondences:
+        if source_idx==v[0]:
+            return v
     #print(source_idx)
     return None
 
@@ -275,11 +277,12 @@ for v in garment_vertices:
             check = True
             break
         else:
-            target_projection_point += bary_weights[i] * co
+            target_projection_point += bary_weights[i] * co[1]
     if check:
         continue
-    scale = 1.5
-    deformed_garment_vertices.append( (target_projection_point + scale*(v.co - loc)))
+    scale = 0.02#(v.co-loc).length * 1.5#0.03
+    # may want to customize per vertex here (intersection check, post-processing)
+    deformed_garment_vertices.append(target_projection_point + scale*co[2])
     valid_idx.append(v.index)
 
 mesh = bpy.data.meshes.new("mesh")
