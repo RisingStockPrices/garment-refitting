@@ -152,30 +152,131 @@ def get_nearest_point(pt, points):
     dist.sort(key=lambda x:x[1])
     return dist[0][0]
 
+def visualize_bbox(center, x, y, z):
+    obj_name = "bbox"
+    mesh_data = bpy.data.meshes.new(obj_name + "_data")
+    obj = bpy.data.objects.new(obj_name, mesh_data)
+    bpy.context.collection.objects.link(obj)
+    
+    vertices = []
+    vertices.append(center+Vector((x,y,z))*0.5)
+    vertices.append(center+Vector((x,y,-z))*0.5)
+    vertices.append(center+Vector((x,-y,z))*0.5)
+    vertices.append(center+Vector((x,-y,-z))*0.5)
+    vertices.append(center+Vector((-x,y,z))*0.5)
+    vertices.append(center+Vector((-x,y,-z))*0.5)
+    vertices.append(center+Vector((-x,-y,z))*0.5)
+    vertices.append(center+Vector((-x,-y,-z))*0.5)
+    
+    face_list = []
+    face_list.append([0,1,3,2])
+    face_list.append([0,1,5,4])
+    face_list.append([1,3,7,5])
+    face_list.append([4,5,7,6])
+    face_list.append([2,3,7,6])
+    face_list.append([0,2,6,4])
+    mesh_data.from_pydata(vertices, [], face_list)
+    
+def compute_human_grid(human):
+    x_rightarm_torso = -0.2
+    x_leftarm_torso = 0.2
+    z_torso_legs = 0.69
+    x_legs = 0
+    
+    # order : torso-leftarm-rightarm-leftleg-rightleg
+    bboxs = []
+    i = 1
+    while i<16:
+        vertices = []
+        for idx in range(i, i+3):
+            vertices = vertices+human[idx]
+        bboxs.append(list(bbox(get_coords(vertices))))
+        i+=3
+    
+    # adjust bounding boxes so that they don't overlap
+    [center_torso, x_torso, y_torso, z_torso] = bboxs[0]
+    for i in range(1,5):
+        [center,x,y,z] = bboxs[i]
+        # left arm
+        if i==1:
+            bound_r = center_torso[0]+0.5*x_torso
+            bound_l = center[0]+0.5*x
+            bboxs[i][0][0] = 0.5*(bound_l+bound_r)
+            bboxs[i][1] = abs(bound_l-bound_r)
+        # right arm
+        elif i==2:
+            bound_l = center_torso[0]-0.5*x_torso
+            bound_r = center[0]-0.5*x
+            bboxs[i][0][0] = 0.5*(bound_l+bound_r)
+            bboxs[i][1] = abs(bound_l-bound_r)
+        else:
+            bound_u = center_torso[2]-0.5*z_torso
+            bound_d = center[2]-0.5*z
+            bboxs[i][0][2] = 0.5*(bound_u+bound_d)
+            bboxs[i][3] = abs(bound_u-bound_d)
+        
+    for bx in bboxs:
+        visualize_bbox(bx[0],bx[1],bx[2],bx[3])
+    
+    return bboxs
+    
+TORSO = 0
+LEFTARM = 1
+RIGHTARM = 2
+LEFTLEG = 3
+RIGHTLEG = 4
+
+def compute_correspondence(source, target):
+    
 # takes in segments_f or segments_m as source and target,
 def get_correspondence(seg_idx, _source, _target):
     
     coords = []
-    post_process_coords = []
+    
     source = _source[seg_idx]
-    target = _target[seg_idx]
+    target = _target[seg_idx] 
     
     if len(source)==0:
         return coords
     
+    #center_source, x_s, y_s, z_s = bbox(get_coords(source))
+    #visualize_bbox(center_source, x_s, y_s, z_s)
+    
+    """
+    post_process_coords = []
     # compute bounding box for source and target segments
     center_source, x_s, y_s, z_s = bbox(get_coords(source))
     center_target, x_t, y_t, z_t = bbox(get_coords(target))
     #print(bbox_source)
+    box = []
+    box.append(center_source+Vector((x_s,y_s,y_s))*0.5)
+    box.append(center_source+Vector((x_s,y_s,-y_s))*0.5)
+    box.append(center_source+Vector((x_s,-y_s,y_s))*0.5)
+    box.append(center_source+Vector((x_s,-y_s,-y_s))*0.5)
+    box.append(center_source+Vector((-x_s,y_s,y_s))*0.5)
+    box.append(center_source+Vector((-x_s,y_s,-y_s))*0.5)
+    box.append(center_source+Vector((-x_s,-y_s,y_s))*0.5)
+    box.append(center_source+Vector((-x_s,-y_s,-y_s))*0.5)
+    #make_temp_mesh(box)
+    box = []
+    box.append(center_target+Vector((x_t,y_t,y_t))*0.5)
+    box.append(center_target+Vector((x_t,y_t,-y_t))*0.5)
+    box.append(center_target+Vector((x_t,-y_t,y_t))*0.5)
+    box.append(center_target+Vector((x_t,-y_t,-y_t))*0.5)
+    box.append(center_target+Vector((-x_t,y_t,y_t))*0.5)
+    box.append(center_target+Vector((-x_t,y_t,-y_t))*0.5)
+    box.append(center_target+Vector((-x_t,-y_t,y_t))*0.5)
+    box.append(center_target+Vector((-x_t,-y_t,-y_t))*0.5)
+    #make_temp_mesh(box)
     
+    bbox_scale = [x_t/x_s, y_t/y_s, z_t/z_s]
+
     for v in source:
         direction = v.co - center_source
         
         # scale up the direction
-        direction[0] *= x_t/x_s
-        direction[1] *= y_t/y_s
-        direction[2] *= z_t/z_s
-
+        for i in range(3):
+            direction[i]*=bbox_scale[i]
         
         res, loc, nor, idx = male.ray_cast(center_target,direction)
         if res is True and is_current_segment(idx,male,target):    
@@ -183,53 +284,24 @@ def get_correspondence(seg_idx, _source, _target):
         else:
             clo = get_nearest_point(center_target+direction,target)
             coords.append((v.index,clo.co,clo.normal))
-            #coords.append((v.index,center_target+direction))
-                # update direction to better fit the segment
-        
-        #coords.append((v.index,loc))
     
-    """
-    
-    center_source = center_of_mass(source)
-    center_target = center_of_mass(target)
-    
-    # translate source to target's center of mass
-    translated_source = translated_coords(source, (center_target-center_source))
-    sum = 0
-    # attempt ray cast for all source points to target object
-    # get an average of the distance ratio between original vector and resulting vector
-    # for ones that don't have a hit -> apply scaling afterwards (post-processing)
-    for v in source:
-        direction = v.co-center_source
-        res, loc, nor, idx = male.ray_cast(center_target,direction)
-        if res and is_current_segment(idx, male, target,strict=False):
-            coords.append((v.index,loc))
-            sum += (loc-center_target).length/direction.length
-        else:
-            clo = get_nearest_point(center_target+direction,target)
-            coords.append((v.index,clo.co))
-            #print('closest point',clo)
-            #r, l, n, i = male.closest_point_on_mesh(center_target+direction)
-            #coords.append((v.index, l))
-            #print('undealt idx:',v.index)
-    
-    # make_temp_mesh(list(map(lambda x:x[1],coords)))
-    """
+    #make_temp_mesh(list(map(lambda x:x[1],coords)))
+
     if len(source)!=len(coords):
         print('Segment [',seg_idx,']: Successfully recovered',len(coords),'vertices out of',len(source))
-    
+    """
     return coords
 
-#get_correspondence(15, segments_f, segments_m)
+bboxs_female= compute_human_grid(segments_m)
+bboxs_source = compute_human_grid(segments_f)
+#get_correspondence(1, segments_f, segments_m)
 
-
-# Idx 0 is the HEAD (takes up over 3,000 vertices, which is pretty wasteful)
-# Our code works for garments that go below the head
+"""
 for i in range(16):
     res = get_correspondence(i,segments_f, segments_m)
     for v in res:
         correspondences.append(v)
-        
+"""   
 
 ###############################################
 #               Deformation for               #
