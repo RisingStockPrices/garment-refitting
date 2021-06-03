@@ -1,6 +1,7 @@
 import bpy
 from mathutils.interpolate import poly_3d_calc
 from mathutils import Vector
+import mathutils
 import bmesh
 import numpy as np
 
@@ -28,6 +29,9 @@ segments_m = []
 
 # This is what we're here for
 correspondences = []
+
+# evaluation criteria
+unmatched_correspondences = 0
 
 for i in range(16):
     segments_f.append([])
@@ -219,89 +223,291 @@ def compute_human_grid(human):
         visualize_bbox(bx[0],bx[1],bx[2],bx[3])
     
     return bboxs
+
+def create_plane(value, point, axis='x'):
+    size = 1
+    vertices = []
+    obj_name = "plane"
+    mesh_data = bpy.data.meshes.new(obj_name + "_data")
+    obj = bpy.data.objects.new(obj_name, mesh_data)
+    bpy.context.collection.objects.link(obj)
+    
+    if axis=='x':
+        ref = Vector((value,point[1],point[2]))
+        vertices.append([ref[0],ref[1]+size,ref[2]+size])
+        vertices.append([ref[0],ref[1]+size,ref[2]-size])
+        vertices.append([ref[0],ref[1]-size,ref[2]+size])
+        vertices.append([ref[0],ref[1]-size,ref[2]-size])
+        mesh_data.from_pydata(vertices, [], [[0,1,3,2]])
+    elif axis=='z':
+        ref = Vector((point[0],point[1],value))
+        vertices.append([ref[0]+size,ref[1]+size,ref[2]])
+        vertices.append([ref[0]+size,ref[1]-size,ref[2]])
+        vertices.append([ref[0]-size,ref[1]+size,ref[2]])
+        vertices.append([ref[0]-size,ref[1]-size,ref[2]])
+        mesh_data.from_pydata(vertices, [], [[0,1,3,2]])
+        
     
 TORSO = 0
 LEFTARM = 1
 RIGHTARM = 2
 LEFTLEG = 3
 RIGHTLEG = 4
+ETC = -1
 
-def compute_correspondence(source, target):
-    
-# takes in segments_f or segments_m as source and target,
-def get_correspondence(seg_idx, _source, _target):
-    
-    coords = []
-    
-    source = _source[seg_idx]
-    target = _target[seg_idx] 
-    
-    if len(source)==0:
-        return coords
-    
-    #center_source, x_s, y_s, z_s = bbox(get_coords(source))
-    #visualize_bbox(center_source, x_s, y_s, z_s)
-    
-    """
-    post_process_coords = []
-    # compute bounding box for source and target segments
-    center_source, x_s, y_s, z_s = bbox(get_coords(source))
-    center_target, x_t, y_t, z_t = bbox(get_coords(target))
-    #print(bbox_source)
-    box = []
-    box.append(center_source+Vector((x_s,y_s,y_s))*0.5)
-    box.append(center_source+Vector((x_s,y_s,-y_s))*0.5)
-    box.append(center_source+Vector((x_s,-y_s,y_s))*0.5)
-    box.append(center_source+Vector((x_s,-y_s,-y_s))*0.5)
-    box.append(center_source+Vector((-x_s,y_s,y_s))*0.5)
-    box.append(center_source+Vector((-x_s,y_s,-y_s))*0.5)
-    box.append(center_source+Vector((-x_s,-y_s,y_s))*0.5)
-    box.append(center_source+Vector((-x_s,-y_s,-y_s))*0.5)
-    #make_temp_mesh(box)
-    box = []
-    box.append(center_target+Vector((x_t,y_t,y_t))*0.5)
-    box.append(center_target+Vector((x_t,y_t,-y_t))*0.5)
-    box.append(center_target+Vector((x_t,-y_t,y_t))*0.5)
-    box.append(center_target+Vector((x_t,-y_t,-y_t))*0.5)
-    box.append(center_target+Vector((-x_t,y_t,y_t))*0.5)
-    box.append(center_target+Vector((-x_t,y_t,-y_t))*0.5)
-    box.append(center_target+Vector((-x_t,-y_t,y_t))*0.5)
-    box.append(center_target+Vector((-x_t,-y_t,-y_t))*0.5)
-    #make_temp_mesh(box)
-    
-    bbox_scale = [x_t/x_s, y_t/y_s, z_t/z_s]
+CENTER = 0
+X_LEN = 1
+Y_LEN = 2
+Z_LEN = 3
 
-    for v in source:
-        direction = v.co - center_source
-        
-        # scale up the direction
-        for i in range(3):
-            direction[i]*=bbox_scale[i]
-        
-        res, loc, nor, idx = male.ray_cast(center_target,direction)
-        if res is True and is_current_segment(idx,male,target):    
-            coords.append((v.index,loc,nor))
-        else:
-            clo = get_nearest_point(center_target+direction,target)
-            coords.append((v.index,clo.co,clo.normal))
-    
-    #make_temp_mesh(list(map(lambda x:x[1],coords)))
-
-    if len(source)!=len(coords):
-        print('Segment [',seg_idx,']: Successfully recovered',len(coords),'vertices out of',len(source))
-    """
-    return coords
-
-bboxs_female= compute_human_grid(segments_m)
+bboxs_target = compute_human_grid(segments_m)
 bboxs_source = compute_human_grid(segments_f)
-#get_correspondence(1, segments_f, segments_m)
 
-"""
-for i in range(16):
-    res = get_correspondence(i,segments_f, segments_m)
-    for v in res:
-        correspondences.append(v)
-"""   
+source_torso_right = bboxs_source[0][0][0]-0.5*bboxs_source[0][1]
+source_torso_left = bboxs_source[0][0][0]+0.5*bboxs_source[0][1]
+source_torso_bottom = bboxs_source[0][0][2]-0.5*bboxs_source[0][3]
+source_torso_up = bboxs_source[0][0][2]+0.5*bboxs_source[0][3]
+
+target_torso_right = bboxs_target[0][0][0]-0.5*bboxs_target[0][1]
+target_torso_left = bboxs_target[0][0][0]+0.5*bboxs_target[0][1]
+target_chest_bottom = bboxs_target[LEFTARM][CENTER][2]-0.5*bboxs_target[LEFTARM][Z_LEN]
+# forgot to de-separate the legs.... f...
+
+def get_source_cross_section_vector(v, horizontal=True, side='None'):
+    # get cross section in source
+    for f in bm_source.faces:
+        f.select = True
+    edges = [e for e in bm_source.edges]
+    faces = [f for f in bm_source.faces]
+    geom = []
+    geom.extend(edges)
+    geom.extend(faces)
+    
+    if horizontal:
+        no = [0,0,1]
+    else:
+        no = [1,0,0]
+        
+    # get cross section curve
+    result = bmesh.ops.bisect_plane(bm_source,
+                              dist=0.001,
+                              geom=geom,
+                              plane_co=v.co,
+                              plane_no=no)
+                              
+    geom_cut = result['geom_cut']
+    count=0
+    center_mass = Vector((0,0,0))
+    if side=='None':
+        for item in geom_cut:
+            if isinstance(item, bmesh.types.BMVert):
+                if source_torso_left>=item.co[0]>=source_torso_right:
+                    center_mass = center_mass + item.co
+                    count+=1
+        center_mass /= count
+    else:
+        for item in geom_cut:
+            if isinstance(item, bmesh.types.BMVert):
+                if (side=='left' and item.co[0]>0) or (side=='right' and item.co[0]<0):
+                    center_mass = center_mass + item.co
+                    count+=1
+        center_mass /= count
+    
+    #make_temp_mesh([center_mass, v.co])
+    #print(geom_cut)
+    
+    return v.co-center_mass
+
+def get_target_chest_correspondence(z_value, x_value,v_src):
+    
+    for f in bm_target.faces:
+        f.select = True
+    edges = [e for e in bm_target.edges]
+    faces = [f for f in bm_target.faces]
+    geom = []
+    geom.extend(edges)
+    geom.extend(faces)
+        
+    # get cross section curve
+    result = bmesh.ops.bisect_plane(bm_target,
+                              dist=0.001,
+                              geom=geom,
+                              plane_co=[0,0,z_value],
+                              plane_no=[0,0,1])
+                              
+    geom_cut = result['geom_cut']
+    candidates = []
+    
+    #verts = []
+    count = 0
+    center_mass = Vector((0,0,0))
+    # get the curve's center of mass
+
+    for item in geom_cut:
+        if isinstance(item, bmesh.types.BMVert):
+            if target_torso_left>=item.co[0]>=target_torso_right:
+                #verts.append(item)
+                center_mass = center_mass + item.co
+                count+=1
+        elif isinstance(item,bmesh.types.BMEdge):
+            vert1 = item.verts[0].co[0]
+            vert2 = item.verts[1].co[0]
+            if (vert1>vert2 and vert1>=x_value>=vert2) or (vert1<vert2 and vert2>=x_value>=vert1):
+                """print(item.verts[0].co, item.verts[1].co, x_value,'check')
+                intersection = mathutils.geometry.intersect_line_plane(item.verts[0].co,item.verts[1].co,[x_value,0,0],[-1,0,0])
+                if intersection != None:
+                    candidates.append(intersection)
+                    """
+                candidates.append([x_value,0.5*(item.verts[0].co[1]+item.verts[1].co[1]),z_value])
+                    
+    center_mass /= count   
+      
+    if len(candidates)!=2:
+        print('length of candidates is not 2 but: ',len(candidates))       
+    for pt in candidates:
+        if v_src[1]>0:
+            if pt[1]>center_mass[1]:
+                return center_mass, Vector(pt)
+        else:
+            if pt[1]<center_mass[1]:
+                return center_mass, Vector(pt)
+    
+    return center_mass, None
+
+
+def get_target_cross_section_center_mass(value, horizontal=True,side='None',v_src=[]):
+    for f in bm_target.faces:
+        f.select = True
+    edges = [e for e in bm_target.edges]
+    faces = [f for f in bm_target.faces]
+    geom = []
+    geom.extend(edges)
+    geom.extend(faces)
+    
+    if horizontal:
+        co = [0,0,value]
+        no = [0,0,1]
+    else:
+        co = [value,0,0]
+        no = [1,0,0]
+        
+    # get cross section curve
+    result = bmesh.ops.bisect_plane(bm_target,
+                              dist=0.001,
+                              geom=geom,
+                              plane_co=co,
+                              plane_no=no)
+                              
+    geom_cut = result['geom_cut']
+    verts = []
+    edges = []
+    count = 0
+    center_mass = Vector((0,0,0))
+    # get the curve's center of mass
+    if side=='None':
+        if value < 0.70:
+            if v_src[0]>0:
+                for item in geom_cut:
+                    if isinstance(item, bmesh.types.BMVert) and item.co[0]>0:
+                        center_mass = center_mass + item.co
+                        count+=1
+            else:
+                for item in geom_cut:
+                    if isinstance(item, bmesh.types.BMVert) and item.co[0]<0:
+                        center_mass = center_mass + item.co
+                        count+=1
+        else:
+            for item in geom_cut:
+                if isinstance(item, bmesh.types.BMVert):
+                    if target_torso_left>=item.co[0]>=target_torso_right:
+                        center_mass = center_mass + item.co
+                        count+=1
+        center_mass /= count                    
+    else:
+        for item in geom_cut:
+            if isinstance(item, bmesh.types.BMVert):
+                if (side=='left' and item.co[0]>0) or (side=='right' and item.co[0]<0):
+                    center_mass = center_mass + item.co
+                    count+=1
+        center_mass /= count
+    
+    #make_temp_mesh([center_mass, v.co])
+    #print(geom_cut)
+    
+    return center_mass
+
+
+def compute_correspondence(v, source, target):
+    
+    # get gundam-grid segment that v is involved in
+    seg_idx = ETC
+    if v.co[2]<source_torso_bottom:
+        if v.co[0]>0:
+            seg_idx = LEFTLEG
+        else:
+            seg_idx = RIGHTLEG
+    elif v.co[2]<source_torso_up:
+        if v.co[0]<source_torso_right:
+            seg_idx = RIGHTARM
+        elif v.co[0]>source_torso_left:
+            seg_idx = LEFTARM
+        else:
+            seg_idx = TORSO
+    
+    if seg_idx==ETC:
+        print('invalid segment!')
+        return (v.index,None)
+    
+    horizontal = not (LEFTARM<=seg_idx<=RIGHTARM)
+    
+    if seg_idx==LEFTLEG or seg_idx==LEFTARM:
+        side='left'
+    elif seg_idx==TORSO:
+        side='None'
+    else:
+        side='right'
+    source_vec = get_source_cross_section_vector(v,horizontal=horizontal,side=side)
+    
+    
+    # compute main axis scale
+    if not horizontal:
+        scale = abs(v.co[0]-(bboxs_source[seg_idx][CENTER][0]-0.5*bboxs_source[seg_idx][X_LEN]))/bboxs_source[seg_idx][X_LEN]
+        cross_section = bboxs_target[seg_idx][CENTER][0]-0.5*bboxs_target[seg_idx][X_LEN]+scale*bboxs_target[seg_idx][X_LEN]
+    else:
+        # get z scale
+        scale = abs(v.co[2]-(bboxs_source[seg_idx][CENTER][2]-0.5*bboxs_source[seg_idx][Z_LEN]))/bboxs_source[seg_idx][Z_LEN]
+        cross_section = bboxs_target[seg_idx][CENTER][2]-0.5*bboxs_target[seg_idx][Z_LEN]+scale*bboxs_target[seg_idx][Z_LEN]
+    """
+    if seg_idx==TORSO and cross_section>=target_chest_bottom:
+        # get additional x scale....
+        x_scale = abs(v.co[0]-(bboxs_source[seg_idx][CENTER][0]-0.5*bboxs_source[seg_idx][X_LEN]))/bboxs_source[seg_idx][X_LEN]
+        x_value = bboxs_target[seg_idx][CENTER][0]-0.5*bboxs_target[seg_idx][X_LEN]+scale*bboxs_target[seg_idx][X_LEN]
+        target_center_mass, loc= get_target_chest_correspondence(cross_section, x_value,v.co)
+        if loc!=None:
+            res, loc, nor, idx = target.ray_cast(target_center_mass, loc-target_center_mass)
+        else:
+            res = False
+        
+    else:
+        target_center_mass = get_target_cross_section_center_mass(cross_section, horizontal=horizontal, side=side,v_src=v.co)
+        res, loc, nor, idx = target.ray_cast(target_center_mass, source_vec)
+    """
+    target_center_mass = get_target_cross_section_center_mass(cross_section, horizontal=horizontal, side=side,v_src=v.co)
+    res, loc, nor, idx = target.ray_cast(target_center_mass, source_vec)
+    
+    if res:
+        if seg_idx==TORSO and not(target_torso_left>=loc[0]>=target_torso_right):
+            # find closest point
+            if loc[0]>target_torso_left:
+                loc[0] = target_torso_left
+            else:
+                loc[0] = target_torso_right
+        
+        return (v.index,loc,nor)
+    else:
+        print('no ray cast result for idx: ',v.index)
+        return (v.index,None)
+
 
 ###############################################
 #               Deformation for               #
@@ -309,8 +515,13 @@ for i in range(16):
 ###############################################
 
 source = bpy.data.objects['source_f']
-garment = bpy.data.objects['garment_shirt']
+garment = bpy.data.objects['garment_pants']
 target = bpy.data.objects['target_m']
+
+bm_source = bmesh.new()
+bm_source.from_mesh(bpy.data.objects['source_f'].data)
+bm_target = bmesh.new()
+bm_target.from_mesh(bpy.data.objects['target_m'].data)
 
 garment_vertices = garment.data.vertices
 source_vertices = source.data.vertices
@@ -321,13 +532,27 @@ source_polygons = source.data.polygons
 
 deformed_garment_vertices = []
 
+
 def get_corresponding_vertex(source_idx):
+    global unmatched_correspondences
     for v in correspondences:
         if source_idx==v[0]:
-            return v
-    #print(source_idx)
-    return None
+            if v[1]==None:
+                return None
+            else:
+                return v
+    # not computed yet
+    res = compute_correspondence(source_vertices[face_vertex_index[i]],source,target)
+    correspondences.append(res)
+    
+    
+    if res[1]!=None:
+        return res
+    else:
+        unmatched_correspondences = unmatched_correspondences+1
+        return None
 
+unmatched_correspondences = 0
 valid_idx = []
 for v in garment_vertices:
     # bind garment vertex to closets point in source mesh
@@ -343,16 +568,21 @@ for v in garment_vertices:
     # get correspondending point in target    
     check = False
     for i in range(3):
+        #co = compute_correspondence(source_vertices[face_vertex_index[i]],source,target)
+        
         co = get_corresponding_vertex(face_vertex_index[i])
+        
         if co==None:
             #print('correspondence doesnt exist for segment')
             check = True
             break
         else:
             target_projection_point += bary_weights[i] * co[1]
+        
+    
     if check:
         continue
-    scale = 0.02#(v.co-loc).length * 1.5#0.03
+    scale = 0.02#1.5*(v.co-loc).length/co[2].length#0.03
     # may want to customize per vertex here (intersection check, post-processing)
     deformed_garment_vertices.append(target_projection_point + scale*co[2])
     valid_idx.append(v.index)
@@ -366,6 +596,7 @@ bpy.context.view_layer.objects.active = new_garment
 
 mesh = bpy.context.object.data
 bm = bmesh.new()
+
 
 face_list = []
 for p in garment_polygons:
@@ -383,7 +614,7 @@ for p in garment_polygons:
     if len(idx_list) == len(p.vertices):
         face_list.append(idx_list)
         
-    #idx_list = [ v for v in p.vertices]
-    #face_list.append(idx_list)
-print('successfully recovered ',len(face_list),'out of',len(garment_polygons))
+
+print('Correspondence Evaluation:',unmatched_correspondences, '/',len(correspondences))
+print('Garment Polygon Evaluation:',len(face_list),'/',len(garment_polygons))
 mesh.from_pydata(deformed_garment_vertices, [], face_list)
